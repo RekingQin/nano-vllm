@@ -48,7 +48,7 @@ class Scheduler:
                     self.preempt(self.running.pop())
                 else:
                     self.preempt(seq)
-                    break
+                    break  # the running queue is empty
             else:
                 num_seqs += 1
                 self.block_manager.may_append(seq)
@@ -57,7 +57,7 @@ class Scheduler:
         self.running.extendleft(reversed(scheduled_seqs))
         return scheduled_seqs, False
 
-    def preempt(self, seq: Sequence):
+    def preempt(self, seq: Sequence):  # very simple preempt strategy
         seq.status = SequenceStatus.WAITING
         self.block_manager.deallocate(seq)
         self.waiting.appendleft(seq)
@@ -65,7 +65,7 @@ class Scheduler:
     def postprocess(self, seqs: list[Sequence], token_ids: list[int]) -> list[bool]:
         for seq, token_id in zip(seqs, token_ids):
             seq.append_token(token_id)
-            if (not seq.ignore_eos and token_id == self.eos) or seq.num_completion_tokens == seq.max_tokens:
+            if (not seq.ignore_eos and token_id == self.eos) or seq.num_completion_tokens == seq.max_tokens:  # check is finished
                 seq.status = SequenceStatus.FINISHED
                 self.block_manager.deallocate(seq)
                 self.running.remove(seq)

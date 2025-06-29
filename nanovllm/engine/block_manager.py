@@ -83,7 +83,7 @@ class BlockManager:
             seq.block_table.append(block_id)
 
     def deallocate(self, seq: Sequence):
-        for block_id in reversed(seq.block_table):
+        for block_id in reversed(seq.block_table):  # from last block to first block
             block = self.blocks[block_id]
             block.ref_count -= 1
             if block.ref_count == 0:
@@ -91,6 +91,7 @@ class BlockManager:
         seq.num_cached_tokens = 0
         seq.block_table.clear()
 
+    # can_append & may_append have some confusions
     def can_append(self, seq: Sequence) -> bool:
         return len(self.free_block_ids) >= (len(seq) % self.block_size == 1)
 

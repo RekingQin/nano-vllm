@@ -19,7 +19,7 @@ class ModelRunner:
         hf_config = config.hf_config
         self.block_size = config.kvcache_block_size
         self.enforce_eager = config.enforce_eager
-        self.world_size = config.tensor_parallel_size
+        self.world_size = config.tensor_parallel_size  # only support TP
         self.rank = rank
         self.event = event
 
@@ -79,10 +79,10 @@ class ModelRunner:
         n = len(data)
         self.shm.buf[0:4] = n.to_bytes(4, "little")
         self.shm.buf[4:n+4] = data
-        for event in self.event:
+        for event in self.event:  # until all ranks have read data
             event.set()
 
-    def call(self, method_name, *args):
+    def call(self, method_name, *args):  # interesting, using share memory
         if self.world_size > 1 and self.rank == 0:
             self.write_shm(method_name, *args)
         method = getattr(self, method_name, None)
@@ -108,6 +108,7 @@ class ModelRunner:
         block_bytes = 2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads * hf_config.head_dim * hf_config.torch_dtype.itemsize
         config.num_kvcache_blocks = int(total * config.gpu_memory_utilization - used - peak + current) // block_bytes
         assert config.num_kvcache_blocks > 0
+        # in cpu or gpu kv_cache ??
         self.kv_cache = torch.zeros(2, hf_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size, num_kv_heads, hf_config.head_dim)
         layer_id = 0
         for module in self.model.modules():
@@ -149,8 +150,8 @@ class ModelRunner:
                     end = start + self.block_size
                 else:
                     end = start + seq.last_block_num_tokens 
-                slot_mapping.extend(list(range(start, end)))
-        if cu_seqlens_k[-1] > cu_seqlens_q[-1]:    # prefix cache
+                slot_mapping.extend(list(range(start, end)))  # each slot corresponding a token
+        if cu_seqlens_k[-1] > cu_seqlens_q[-1]:    # prefix cache, at beginning, block_tables is None???
             block_tables = self.prepare_block_tables(seqs)
         input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
@@ -218,8 +219,8 @@ class ModelRunner:
         config = self.config
         hf_config = config.hf_config
         max_bs = min(self.config.max_num_seqs, 512)
-        max_num_blocks = (config.max_model_len + self.block_size - 1) // self.block_size
-        input_ids = torch.zeros(max_bs, dtype=torch.int64)
+        max_num_blocks = (config.max_model_len + self.block_size - 1) // self.block_size  # each request may occupy maximum block numbers
+        input_ids = torch.zeros(max_bs, dtype=torch.int64) # just for decode
         positions = torch.zeros(max_bs, dtype=torch.int64)
         slot_mapping = torch.zeros(max_bs, dtype=torch.int32)
         context_lens = torch.zeros(max_bs, dtype=torch.int32)

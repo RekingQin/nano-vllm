@@ -190,6 +190,8 @@ class Qwen3ForCausalLM(nn.Module):
         "up_proj": ("gate_up_proj", 1),
     }
 
+    # how does the model do loading??
+
     def __init__(
         self,
         config: Qwen3Config

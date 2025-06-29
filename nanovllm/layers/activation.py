@@ -10,5 +10,6 @@ class SiluAndMul(nn.Module):
 
     @torch.compile
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x, y = x.chunk(2, -1)
+        # x = [batch, ..., 2 * hidden_dim]
+        x, y = x.chunk(2, -1)  # split last dim into 2 parts equally
         return F.silu(x) * y

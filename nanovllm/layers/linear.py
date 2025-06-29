@@ -5,11 +5,16 @@ import torch.distributed as dist
 
 
 def divide(numerator, denominator):
+    # 用于整除，确保分片时不会有余数，常用于并行时的均匀切分
     assert numerator % denominator == 0
     return numerator // denominator
 
 
 class LinearBase(nn.Module):
+    """
+    作为所有线性层的基类，记录输入输出维度、并行维度（tp_dim）、当前进程rank和总进程数（tp_size）。
+    forward未实现，需子类实现。
+    """
 
     def __init__(
         self,
@@ -20,7 +25,7 @@ class LinearBase(nn.Module):
         super().__init__()
         self.input_size = input_size
         self.output_size = output_size
-        self.tp_dim = tp_dim
+        self.tp_dim = tp_dim  # equal to 0, 1, etc.
         self.tp_rank = dist.get_rank()
         self.tp_size = dist.get_world_size()
 
@@ -29,6 +34,11 @@ class LinearBase(nn.Module):
 
 
 class ReplicatedLinear(LinearBase):
+    """
+    全量复制的线性层，每个进程都有完整参数。
+    weight_loader用于加载权重。
+    forward直接用F.linear。
+    """
 
     def __init__(
         self,
@@ -53,6 +63,12 @@ class ReplicatedLinear(LinearBase):
 
 
 class ColumnParallelLinear(LinearBase):
+    """
+    列并行线性层：output维度被均匀分到各进程，每个进程只负责部分输出。
+    weight shape: [output_size_per_partition, input_size]
+    weight_loader：从完整权重中切分本进程负责的部分。
+    forward：只计算本进程负责的输出列。
+    """
 
     def __init__(
         self,
@@ -84,6 +100,11 @@ class ColumnParallelLinear(LinearBase):
 
 
 class MergedColumnParallelLinear(ColumnParallelLinear):
+    """
+    用于多个输出分组合并的列并行线性层, 如QKV合并 & gate_up_proj
+    output_sizes：每个分组的输出维度。
+    weight_loader：根据分组和进程rank切分权重。
+    """
 
     def __init__(
         self,
@@ -104,13 +125,18 @@ class MergedColumnParallelLinear(ColumnParallelLinear):
 
 
 class QKVParallelLinear(ColumnParallelLinear):
+    """
+    专为QKV合并的列并行线性层（如Transformer中的Q、K、V）。
+    支持Q、K、V头数不同（如Llama等）。
+    weight_loader根据Q/K/V类型和rank切分权重。
+    """
 
     def __init__(
         self,
         hidden_size: int,
         head_size: int,
         total_num_heads: int,
-        total_num_kv_heads: int | None = None,
+        total_num_kv_heads: int | None = None,  # kv head may differ with q head number
         bias: bool = False,
     ):
         self.head_size = head_size
@@ -132,7 +158,7 @@ class QKVParallelLinear(ColumnParallelLinear):
         elif loaded_shard_id == "k":
             shard_size = self.num_kv_heads * self.head_size
             shard_offset = self.num_heads * self.head_size
-        else:
+        else:  # for v heads
             shard_size = self.num_kv_heads * self.head_size
             shard_offset = self.num_heads * self.head_size + self.num_kv_heads * self.head_size
         param_data = param_data.narrow(self.tp_dim, shard_offset, shard_size)
@@ -141,6 +167,11 @@ class QKVParallelLinear(ColumnParallelLinear):
 
 
 class RowParallelLinear(LinearBase):
+    """
+    行并行线性层：输入维度被均匀分到各进程，每个进程只负责部分输入。
+    weight shape: [output_size, input_size_per_partition]
+    forward：每个进程计算部分输出，最后用all_reduce聚合所有进程的结果（只有rank 0加bias）。
+    """
 
     def __init__(
         self,
@@ -170,5 +201,5 @@ class RowParallelLinear(LinearBase):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = F.linear(x, self.weight, self.bias if self.tp_rank == 0 else None)
         if self.tp_size > 1:
-            dist.all_reduce(y)
+            dist.all_reduce(y)  # so, in attention, after calculation, reduce will be revoked
         return y

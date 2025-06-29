@@ -64,7 +64,7 @@ class Sequence:
 
     def block(self, i):
         assert 0 <= i < self.num_blocks
-        return self.token_ids[i*self.block_size: (i+1)*self.block_size]
+        return self.token_ids[i*self.block_size: (i+1)*self.block_size]  # may have some trap, the block may not be full
 
     def append_token(self, token_id: int):
         self.token_ids.append(token_id)

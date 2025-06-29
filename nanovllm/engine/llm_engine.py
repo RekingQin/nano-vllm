@@ -15,22 +15,23 @@ from nanovllm.engine.model_runner import ModelRunner
 class LLMEngine:
 
     def __init__(self, model, **kwargs):
+        # main process
         config_fields = {field.name for field in fields(Config)}
         config_kwargs = {k: v for k, v in kwargs.items() if k in config_fields}
         config = Config(model, **config_kwargs)
         self.ps = []
         self.events = []
         ctx = mp.get_context("spawn")
-        for i in range(1, config.tensor_parallel_size):
+        for i in range(1, config.tensor_parallel_size):  # tp rank
             event = ctx.Event()
             process = ctx.Process(target=ModelRunner, args=(config, i, event))
             process.start()
             self.ps.append(process)
             self.events.append(event)
-        self.model_runner = ModelRunner(config, 0, self.events)
+        self.model_runner = ModelRunner(config, 0, self.events) # rank 0 get all events from other ranks
         self.tokenizer = AutoTokenizer.from_pretrained(config.model, use_fast=True)
         config.eos = self.tokenizer.eos_token_id
-        self.scheduler = Scheduler(config)
+        self.scheduler = Scheduler(config)  # scheduler
         atexit.register(self.exit)
 
     def exit(self):
@@ -41,16 +42,16 @@ class LLMEngine:
 
     def add_request(self, prompt: str | list[int], sampling_params: SamplingParams):
         if isinstance(prompt, str):
-            prompt = self.tokenizer.encode(prompt)
+            prompt = self.tokenizer.encode(prompt)  # convert to prompt ids
         seq = Sequence(prompt, sampling_params)
-        self.scheduler.add(seq)
+        self.scheduler.add(seq)  # using scheduler add the request, same with vLLM
 
     def step(self):
         seqs, is_prefill = self.scheduler.schedule()
         token_ids = self.model_runner.call("run", seqs, is_prefill)
         self.scheduler.postprocess(seqs, token_ids)
         outputs = [(seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished]
-        num_tokens = sum(len(seq) for seq in seqs) if is_prefill else -len(seqs)
+        num_tokens = sum(len(seq) for seq in seqs) if is_prefill else -len(seqs)  # just for distinguish prefill & decode statistics info
         return outputs, num_tokens
 
     def is_finished(self):
@@ -65,9 +66,9 @@ class LLMEngine:
         if use_tqdm:
             pbar = tqdm(total=len(prompts), desc="Generating", dynamic_ncols=True)
         if not isinstance(sampling_params, list):
-            sampling_params = [sampling_params] * len(prompts)
+            sampling_params = [sampling_params] * len(prompts)  # each prompt has its own sampling parameters
         for prompt, sp in zip(prompts, sampling_params):
-            self.add_request(prompt, sp)
+            self.add_request(prompt, sp)  # scheduler will add it
         outputs = {}
         prefill_throughput = decode_throughput = 0.
         while not self.is_finished():
@@ -77,12 +78,12 @@ class LLMEngine:
                 if num_tokens > 0:
                     prefill_throughput = num_tokens / (perf_counter() - t)
                 else:
-                    decode_throughput = -num_tokens / (perf_counter() - t)
+                    decode_throughput = -num_tokens / (perf_counter() - t)  # convert it to positive value
                 pbar.set_postfix({
                     "Prefill": f"{int(prefill_throughput)}tok/s",
                     "Decode": f"{int(decode_throughput)}tok/s",
                 })
-            for seq_id, token_ids in output:
+            for seq_id, token_ids in output:  # list[(seq_id, token_ids)], no stream mode
                 outputs[seq_id] = token_ids
                 if use_tqdm:
                     pbar.update(1)
