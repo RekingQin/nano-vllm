@@ -70,7 +70,7 @@ class BlockManager:
             if cache_miss:
                 block_id = self.free_block_ids[0]
                 block = self._allocate_block(block_id)
-            else:
+            else:  # re-use kv cache
                 seq.num_cached_tokens += self.block_size
                 if block_id in self.used_block_ids:
                     block = self.blocks[block_id]
