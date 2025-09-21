@@ -15,6 +15,8 @@ from nanovllm.utils.loader import load_model
 class ModelRunner:
 
     def __init__(self, config: Config, rank: int, event: Event | list[Event]):
+        print(f"[ModelRunner][__init__] config = {config}, rank = {rank}")
+        print(f"[ModelRunner][__init__] hf_config = {config.hf_config}")
         self.config = config
         hf_config = config.hf_config
         self.block_size = config.kvcache_block_size
@@ -31,10 +33,16 @@ class ModelRunner:
         self.model = Qwen3ForCausalLM(hf_config)
         load_model(self.model, config.model)
         self.sampler = Sampler()
+        print(f"[ModelRunner][__init__] start warmup model")
         self.warmup_model()
+        print(f"[ModelRunner][__init__] warmup model finished")
+        print(f"[ModelRunner][__init__] start allocate_kv_cache")
         self.allocate_kv_cache()
+        print(f"[ModelRunner][__init__] allocate_kv_cache finished")
         if not self.enforce_eager:
+            print(f"[ModelRunner][__init__] start capture_cudagraph")
             self.capture_cudagraph()
+            print(f"[ModelRunner][__init__] capture_cudagraph finished")
         torch.set_default_device("cpu")
         torch.set_default_dtype(default_dtype)
 
@@ -104,10 +112,13 @@ class ModelRunner:
         used = total - free
         peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
         current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
+        print(f"[ModelRunner][allocate_kv_cache] total = {total}, free = {free}, used = {used}, peak = {peak}, current = {current}")
         num_kv_heads = hf_config.num_key_value_heads // self.world_size
         block_bytes = 2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads * hf_config.head_dim * hf_config.torch_dtype.itemsize
         config.num_kvcache_blocks = int(total * config.gpu_memory_utilization - used - peak + current) // block_bytes
         assert config.num_kvcache_blocks > 0
+        print(f"[ModelRunner][allocate_kv_cache] num_kvcache_blocks = {config.num_kvcache_blocks}")
+        print("\n\n")
         self.kv_cache = torch.empty(2, hf_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size, num_kv_heads, hf_config.head_dim)
         layer_id = 0
         for module in self.model.modules():
@@ -120,6 +131,8 @@ class ModelRunner:
         max_len = max(len(seq.block_table) for seq in seqs)
         block_tables = [seq.block_table + [-1] * (max_len - len(seq.block_table)) for seq in seqs]
         block_tables = torch.tensor(block_tables, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        print(f"[ModelRunner][prepare_block_tables] max_len = {max_len}, block_tables shape = {block_tables.shape}")
+        print("\n\n")
         return block_tables
 
     def prepare_prefill(self, seqs: list[Sequence]):
@@ -141,7 +154,8 @@ class ModelRunner:
             cu_seqlens_k.append(cu_seqlens_k[-1] + seqlen_k)
             max_seqlen_q = max(seqlen_q, max_seqlen_q)
             max_seqlen_k = max(seqlen_k, max_seqlen_k)
-            if not seq.block_table:    # warmup
+            if not seq.block_table:    # warmup, won't store kv cache, so its seq.block_table is empty, and set slot_mapping to be empty
+                print(f"[ModelRunner][prepare_prefill] enter [if not seq.block_table:] !!!!!!!")
                 continue
             for i in range(seq.num_cached_blocks, seq.num_blocks):
                 start = seq.block_table[i] * self.block_size
@@ -152,6 +166,15 @@ class ModelRunner:
                 slot_mapping.extend(list(range(start, end)))
         if cu_seqlens_k[-1] > cu_seqlens_q[-1]:    # prefix cache
             block_tables = self.prepare_block_tables(seqs)
+        print(f"[ModelRunner][prepare_prefill] input_ids = {input_ids}")
+        print(f"[ModelRunner][prepare_prefill] positions = {positions}")
+        print(f"[ModelRunner][prepare_prefill] cu_seqlens_q = {cu_seqlens_q}")
+        print(f"[ModelRunner][prepare_prefill] cu_seqlens_k = {cu_seqlens_k}")
+        print(f"[ModelRunner][prepare_prefill] max_seqlen_q = {max_seqlen_q}")
+        print(f"[ModelRunner][prepare_prefill] max_seqlen_k = {max_seqlen_k}")
+        print(f"[ModelRunner][prepare_prefill] slot_mapping = {slot_mapping}")
+        print(f"[ModelRunner][prepare_prefill] block_tables = {block_tables}")
+        print("\n\n")
         input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
@@ -170,11 +193,17 @@ class ModelRunner:
             positions.append(len(seq) - 1)
             context_lens.append(len(seq))
             slot_mapping.append(seq.block_table[-1] * self.block_size + seq.last_block_num_tokens  - 1)
+        print(f"[ModelRunner][prepare_decode] input_ids = {input_ids}")
+        print(f"[ModelRunner][prepare_decode] positions = {positions}")
+        print(f"[ModelRunner][prepare_decode] slot_mapping = {slot_mapping}")
+        print(f"[ModelRunner][prepare_decode] context_lens = {context_lens}")
         input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         context_lens = torch.tensor(context_lens, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         block_tables = self.prepare_block_tables(seqs)
+        print(f"[ModelRunner][prepare_decode] block_tables = {block_tables}")
+        print("\n\n")
         set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables)
         return input_ids, positions
 
@@ -227,6 +256,15 @@ class ModelRunner:
         self.graph_bs = [1, 2, 4, 8] + list(range(16, max_bs + 1, 16))
         self.graphs = {}
         self.graph_pool = None
+        print(f"[ModelRunner][capture_cudagraph] max_bs = {max_bs}, block_size = {self.block_size}")
+        print(f"[ModelRunner][capture_cudagraph] max_num_blocks = {max_num_blocks}")
+        print(f"[ModelRunner][capture_cudagraph] input_ids = {input_ids}")
+        print(f"[ModelRunner][capture_cudagraph] positions = {positions}")
+        print(f"[ModelRunner][capture_cudagraph] slot_mapping = {slot_mapping}")
+        print(f"[ModelRunner][capture_cudagraph] context_lens = {context_lens}")
+        print(f"[ModelRunner][capture_cudagraph] block_tables = {block_tables}")
+        print(f"[ModelRunner][capture_cudagraph] self.graph_bs = {self.graph_bs}")
+        print("\n\n")
 
         for bs in reversed(self.graph_bs):
             graph = torch.cuda.CUDAGraph()
