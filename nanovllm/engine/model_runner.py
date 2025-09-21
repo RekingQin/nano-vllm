@@ -104,6 +104,7 @@ class ModelRunner:
         seqs = [Sequence([0] * max_model_len) for _ in range(num_seqs)]
         print(f"[ModelRunner][warmup_model] max_num_batched_tokens = {max_num_batched_tokens}, max_model_len = {max_model_len}, num_seqs = {num_seqs}")
         print(f"[ModelRunner][warmup_model] seqs = {seqs}")
+        print("\n\n")
         self.run(seqs, True)
         torch.cuda.empty_cache()
 
