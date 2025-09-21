@@ -102,6 +102,8 @@ class ModelRunner:
         max_num_batched_tokens, max_model_len = self.config.max_num_batched_tokens, self.config.max_model_len
         num_seqs = min(max_num_batched_tokens // max_model_len, self.config.max_num_seqs)
         seqs = [Sequence([0] * max_model_len) for _ in range(num_seqs)]
+        print(f"[ModelRunner][warmup_model] max_num_batched_tokens = {max_num_batched_tokens}, max_model_len = {max_model_len}, num_seqs = {num_seqs}")
+        print(f"[ModelRunner][warmup_model] seqs = {seqs}")
         self.run(seqs, True)
         torch.cuda.empty_cache()
 
@@ -112,7 +114,8 @@ class ModelRunner:
         used = total - free
         peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
         current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
-        print(f"[ModelRunner][allocate_kv_cache] total = {total}, free = {free}, used = {used}, peak = {peak}, current = {current}")
+        GB = 1.0 * 1024 ** 3
+        print(f"[ModelRunner][allocate_kv_cache] total = {total / GB} GB, free = {free / GB} GB, used = {used / GB} GB, peak = {peak / GB} GB, current = {current / GB} GB")
         num_kv_heads = hf_config.num_key_value_heads // self.world_size
         block_bytes = 2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads * hf_config.head_dim * hf_config.torch_dtype.itemsize
         config.num_kvcache_blocks = int(total * config.gpu_memory_utilization - used - peak + current) // block_bytes
