@@ -60,6 +60,7 @@ class ColumnParallelLinear(LinearBase):
         bias: bool = False,
     ):
         tp_size = dist.get_world_size()
+        assert output_size % tp_size == 0
         super().__init__(input_size, divide(output_size, tp_size), bias, 0)
 
     def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
@@ -137,6 +138,7 @@ class RowParallelLinear(LinearBase):
         bias: bool = False,
     ):
         tp_size = dist.get_world_size()
+        assert input_size % tp_size == 0
         super().__init__(divide(input_size, tp_size), output_size, bias, 1)
 
     def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):

@@ -31,12 +31,22 @@ def store_kvcache_kernel(
 
 
 def store_kvcache(key: torch.Tensor, value: torch.Tensor, k_cache: torch.Tensor, v_cache: torch.Tensor, slot_mapping: torch.Tensor):
+    """
+    Store key and value to k_cache and v_cache based on slot mapping
+    :param key: Input key tensor of shape (N, num_heads, head_dim)
+    :param value: Input value tensor of shape (N, num_heads, head_dim)
+    :param k_cache: Key cache tensor of shape (max_kv_cache_block_num, block_size, num_kv_heads, head_dim)
+    :param v_cache: Value cache tensor of shape (max_kv_cache_block_num, block_size, num_kv_heads, head_dim)
+    :param slot_mapping: Slot mapping tensor of shape (N,)
+    :return: None
+    """
     N, num_heads, head_dim = key.shape
     D = num_heads * head_dim
     assert key.stride(-1) == 1 and value.stride(-1) == 1
     assert key.stride(1) == head_dim and value.stride(1) == head_dim
     assert k_cache.stride(1) == D and v_cache.stride(1) == D
     assert slot_mapping.numel() == N
+    assert key.stride(0) == value.stride(0) == D
     store_kvcache_kernel[(N,)](key, key.stride(0), value, value.stride(0), k_cache, v_cache, slot_mapping, D)
 
 
@@ -59,7 +69,7 @@ class Attention(nn.Module):
     def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
         context = get_context()
         k_cache, v_cache = self.k_cache, self.v_cache
-        if k_cache.numel() and v_cache.numel():
+        if k_cache.numel() and v_cache.numel():  # for warming up, k_cache & v_cache is empty
             store_kvcache(k, v, k_cache, v_cache, context.slot_mapping)
         if context.is_prefill:
             if context.block_tables is not None:    # prefix cache
