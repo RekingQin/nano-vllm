@@ -91,7 +91,7 @@ class BlockManager:
         seq.block_table.clear()
 
     def can_append(self, seq: Sequence) -> bool:
-        return len(self.free_block_ids) >= (len(seq) % self.block_size == 1)
+        return len(self.free_block_ids) >= (len(seq) % self.block_size == 1)  # seq may add a new token, but block hasn't added it yet
 
     def may_append(self, seq: Sequence):
         block_table = seq.block_table

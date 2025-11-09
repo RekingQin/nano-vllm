@@ -43,7 +43,7 @@ class Scheduler:
         # decode
         while self.running and num_seqs < self.max_num_seqs:
             seq = self.running.popleft()
-            while not self.block_manager.can_append(seq):
+            while not self.block_manager.can_append(seq): # for decode request processing, with a new generated token taken into account
                 if self.running:
                     self.preempt(self.running.pop())
                 else:
